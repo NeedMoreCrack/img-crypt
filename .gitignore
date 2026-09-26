@@ -1,0 +1,95 @@
+# =========================================================
+# Go build outputs
+# =========================================================
+
+# Binary output
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Go test binary
+*.test
+
+# Coverage
+*.out
+coverage.*
+
+# Build directories
+dist/
+build/
+bin/
+
+# Temporary build/cache files
+*.tmp
+*.temp
+
+# =========================================================
+# Go workspace / environment
+# =========================================================
+
+# Optional Go workspace file
+go.work
+go.work.sum
+
+# Local environment files
+.env
+.env.*
+
+# =========================================================
+# IDE
+# =========================================================
+
+# GoLand / IntelliJ IDEA
+.idea/
+*.iml
+
+# VS Code
+.vscode/
+
+# =========================================================
+# OS generated files
+# =========================================================
+
+# Windows
+Thumbs.db
+Desktop.ini
+
+# macOS
+.DS_Store
+
+# Linux
+*~
+
+# =========================================================
+# ImgCrypt generated files
+# =========================================================
+
+# Encrypted output
+*.enc
+
+# Generated ImgCrypt text chunks
+*.imgcrypt.txt
+
+# Decrypted images
+*.decrypted.jpg
+*.decrypted.jpeg
+*.decrypted.png
+*.decrypted.webp
+
+# =========================================================
+# Logs
+# =========================================================
+
+*.log
+logs/
+
+# =========================================================
+# Misc
+# =========================================================
+
+# Backup files
+*.bak
+*.swp
+*.swo
