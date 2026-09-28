@@ -135,62 +135,36 @@ func encryptImageToChunks() error {
 	if len(paths) == 0 {
 		return errors.New("no image files found")
 	}
-	// Inspect the selected files before asking for format-specific settings.
-	imageInfoByPath := make(map[string]ImageInfo, len(paths))
-	hasJPEG, hasPNG := false, false
-	for _, path := range paths {
-		info, err := detectImageFormat(path)
-		if err != nil {
-			fmt.Printf("[ERROR] %s: %v\n", path, err)
-			continue
-		}
-		imageInfoByPath[path] = info
-		if info.FormatCode == formatJPEG {
-			hasJPEG = true
-		}
-		if info.FormatCode == formatPNG {
-			hasPNG = true
-		}
-	}
-	if len(imageInfoByPath) == 0 {
-		return errors.New("no readable image files found")
-	}
-	fmt.Printf("[INFO] Selected %d images\n", len(imageInfoByPath))
+	fmt.Printf("[INFO] Selected %d images\n", len(paths))
 	password := readLine("Password (blank = convert without encryption): ")
 	if password == "" {
 		fmt.Println("[INFO] No password: TXT content will NOT be encrypted.")
 	}
-	quality := defaultJPEGQuality
-	if hasJPEG {
-		quality = readJPEGQuality()
-	}
-	pngMode := byte(3)
-	if hasPNG {
-		pngMode = readPNGCompressionMode()
-	}
+	quality := readJPEGQuality()
+	pngMode := readPNGCompressionMode()
 	encodingType := readEncodingType()
 	maxChars := readMaxMessageChars()
 	fmt.Println("[INFO] Output directory:", baseDir)
 	succeeded := 0
 	for _, inputPath := range paths {
-		info, ok := imageInfoByPath[inputPath]
-		if !ok {
-			continue
-		}
-		if err := encryptOne(inputPath, info, baseDir, password, quality, pngMode, encodingType, maxChars); err != nil {
+		if err := encryptOne(inputPath, baseDir, password, quality, pngMode, encodingType, maxChars); err != nil {
 			fmt.Printf("[ERROR] %s: %v\n", inputPath, err)
 		} else {
 			succeeded++
 		}
 	}
-	fmt.Printf("[INFO] Processed %d/%d readable images\n", succeeded, len(imageInfoByPath))
+	fmt.Printf("[INFO] Processed %d/%d images\n", succeeded, len(paths))
 	if succeeded == 0 {
 		return errors.New("no images processed")
 	}
 	return nil
 }
 
-func encryptOne(inputPath string, info ImageInfo, baseDir, password string, quality int, pngMode byte, encodingType string, maxChars int) error {
+func encryptOne(inputPath, baseDir, password string, quality int, pngMode byte, encodingType string, maxChars int) error {
+	info, err := detectImageFormat(inputPath)
+	if err != nil {
+		return err
+	}
 	info.OriginalName = filepath.Base(inputPath)
 	data, originalSize, processedInfo, err := processImageForEncryption(inputPath, info, quality, pngMode)
 	if err != nil {
