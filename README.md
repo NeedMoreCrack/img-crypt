@@ -2,1319 +2,245 @@
 
 # ImgCrypt
 
-A lightweight cross-platform CLI tool for image compression, encryption, and text-based transmission.
+ImgCrypt is a Go CLI that converts images into transferable Base64 or Base85 text chunks. Encryption is optional. It can process multiple images with one set of settings and restore the original filenames.
 
-輕量級跨平台 CLI 圖片壓縮、加密與純文字傳輸工具。
+ImgCrypt 是 Go 開發的 CLI 工具，可將圖片轉成適合文字傳輸的 Base64 或 Base85 分段。加密可選擇開啟；程式可用同一組設定批次處理圖片，並還原原始檔名。
 
----
+## English
 
-# English
+### Features
 
-## Overview
+- Process one image, multiple specified files, or the images in a directory; the directory scan is not recursive.
+- By default, read images beside the executable and write one TXT file per image beside the executable.
+- Use one password, JPEG quality, PNG compression mode, text encoding, and chunk length for the whole batch.
+- Enter a password for AES-256-GCM encryption with a new random salt and nonce per image. Leave the password blank for **conversion without encryption**; the resulting text is readable by anyone who has it.
+- Ask for JPEG quality only if the batch contains JPEG; ask for PNG compression only if it contains PNG.
+- Decode a pasted set of chunks or restore one or more TXT files. Chunks from one image can be pasted in any order.
+- Check chunk count, duplicate chunks, encoding, and message ID; encrypted files also receive AES-GCM authentication.
+- Preserve the original image filename and extension in newly created TXT files. Older ImgCrypt v1/v2 TXT files can still be decoded.
 
-ImgCrypt is a CLI tool written in Go.
+### Image formats
 
-It can:
+| Format | Processing |
+| --- | --- |
+| JPG/JPEG | Re-encoded with configurable JPEG quality (default 50; lossy). |
+| PNG | Re-encoded with lossless PNG compression (default: Best Compression). |
+| WebP and APNG | Original bytes preserved; APNG animation is not re-encoded. |
+| Other listed image extensions | Original bytes preserved, without transcoding or size reduction. |
 
-- Compress images
-- Encrypt image data with AES-256-GCM
-- Convert encrypted binary data into Base64 or Base85 text
-- Split the encoded text into multiple chunks
-- Reassemble chunks and restore the image
-- Read encrypted chunks directly from a TXT file
+The directory scan recognizes GIF, BMP, TIFF, HEIC/HEIF, AVIF, ICO, ICNS, SVG, JFIF, JPE, JXL, JP2, PSD, RAW, DNG, CR2, NEF, ARW, QOI, EXR, TGA, PBM, PGM, PPM, plus JPG/JPEG, PNG, WebP, and APNG. For these other formats, the program selects files by extension and preserves their bytes; it does **not** validate, decode, or compress every format. Unsupported extensions are skipped during directory scanning. JPEG, PNG, and WebP are identified by their file headers.
 
-It is designed for situations where files cannot be transferred directly and only text messages can be sent.
+> JPEG recompression changes image bytes and can reduce quality. PNG recompression is lossless for the image but may change the file bytes. Base64/Base85 encoding is reversible and does not compress an image.
 
----
-
-## Features
-
-- Cross-platform CLI
-- No Go runtime required after compilation
-- Windows support
-- macOS Intel support
-- macOS Apple Silicon support
-- Linux support
-- Android support through Termux
-- JPG / JPEG support
-- PNG support
-- WebP support
-- JPEG quality adjustment
-- PNG compression
-- AES-256-GCM encryption
-- scrypt password-based key derivation
-- Base64 encoding
-- Base85 encoding
-- User-configurable maximum message length
-- Automatic chunk splitting
-- Automatic chunk sorting and merging
-- Missing / duplicate chunk detection
-- Message ID verification
-- TXT file decryption
-- Automatic output image extension restoration
-
----
-
-## How It Works
-
-Encryption flow:
+### Menu
 
 ```text
-Image
-  ↓
-Image Compression
-  ↓
-AES-256-GCM Encryption
-  ↓
-Base64 / Base85 Encoding
-  ↓
-Text Chunk Splitting
-  ↓
-Transfer as Text
-```
-
-Decryption flow:
-
-```text
-Text Chunks / TXT File
-  ↓
-Chunk Validation
-  ↓
-Chunk Sorting
-  ↓
-Chunk Merging
-  ↓
-Base64 / Base85 Decoding
-  ↓
-AES-256-GCM Decryption
-  ↓
-Image
-```
-
----
-
-## Supported Formats
-
-### JPEG / JPG
-
-JPEG images can be recompressed with a configurable quality value.
-
-Default:
-
-```text
-Quality = 50
-```
-
-Example:
-
-```text
-Original JPG
-958 KB
-
-↓
-
-JPEG Quality 50
-
-↓
-
-Compressed JPG
-578 KB
-```
-
-Actual compression ratio depends on the image.
-
-> JPEG recompression is lossy.
-> The decrypted result is the compressed JPEG, not the original byte-for-byte JPEG file.
-
----
-
-### PNG
-
-PNG uses lossless compression.
-
-Available modes:
-
-```text
-Default
-Best Speed
-Best Compression
-```
-
-PNG preserves image quality, but the compression ratio may be lower than JPEG.
-
----
-
-### WebP
-
-WebP files are supported.
-
-The current implementation preserves the existing WebP data instead of performing quality-based recompression.
-
-```text
-WebP
-  ↓
-AES-256-GCM
-  ↓
-Base64 / Base85
-```
-
----
-
-## Encryption
-
-ImgCrypt uses:
-
-```text
-AES-256-GCM
-```
-
-AES-GCM provides:
-
-```text
-Encryption
-+
-Integrity Verification
-```
-
-If the password is incorrect or the encrypted data has been modified, decryption will fail.
-
----
-
-## Password Key Derivation
-
-ImgCrypt uses `scrypt` to derive a 256-bit AES key from the password.
-
-```text
-Password
-+
-Random Salt
-  ↓
-scrypt
-  ↓
-256-bit AES Key
-```
-
-A new random salt and nonce are generated for every encryption operation.
-
----
-
-## Base64 and Base85
-
-### Base64
-
-Advantages:
-
-- High compatibility
-- Commonly supported
-- Safer on systems that modify special characters
-
-Disadvantage:
-
-- Binary data becomes approximately 33% larger
-
-Example:
-
-```text
-600 KB binary
-↓
-Base64
-↓
-~800 KB text
-```
-
----
-
-### Base85
-
-Advantages:
-
-- Shorter than Base64
-- Better when message length is limited
-
-Example:
-
-```text
-600 KB binary
-↓
-Base85
-↓
-~750 KB text
-```
-
-Base85 is recommended when minimizing character count is more important.
-
-> Some platforms may modify special characters.
-> If that happens, use Base64 instead.
-
----
-
-## Text Chunking
-
-Many messaging platforms impose a maximum character limit per message.
-
-ImgCrypt allows users to define the maximum message length.
-
-Example:
-
-```text
-Maximum characters per message [default 500]: 500
-```
-
-The program dynamically calculates the available payload size.
-
-The complete chunk, including metadata, will stay within the configured limit.
-
-Example:
-
-```text
-IMGCRYPT|B85|263c44efcf9d1cb7|1/88|......
-IMGCRYPT|B85|263c44efcf9d1cb7|2/88|......
-IMGCRYPT|B85|263c44efcf9d1cb7|3/88|......
-```
-
-Each chunk contains:
-
-```text
-IMGCRYPT
-Encoding Type
-Message ID
-Chunk Number
-Total Chunk Count
-Payload
-```
-
----
-
-## Message ID
-
-Each encrypted payload receives a Message ID.
-
-Example:
-
-```text
-263c44efcf9d1cb7
-```
-
-The Message ID helps prevent chunks from different images from being accidentally mixed.
-
-ImgCrypt checks:
-
-- Missing chunks
-- Duplicate chunks
-- Mixed Message IDs
-- Invalid chunk count
-- Invalid encoding
-- Corrupted encrypted data
-
----
-
-## TXT File Support
-
-Chunks can be saved into a TXT file.
-
-Example:
-
-```text
-image.jpg.imgcrypt.txt
-```
-
-The receiver can decrypt directly from the TXT file.
-
-```text
-TXT File
-↓
-Read Chunks
-↓
-Validate
-↓
-Sort
-↓
-Merge
-↓
-Decode
-↓
-Decrypt
-↓
-Image
-```
-
-This is useful when manually pasting dozens of chunks would be inconvenient.
-
----
-
-## Menu
-
-```text
-==============================================
-                  ImgCrypt
- Image Compress + AES + Base64/Base85 Chunks
-==============================================
-
-Please select options:
-
-1. Encrypt image -> Base64/Base85 text chunks
+1. Convert images -> TXT files (optional encryption, batch)
 2. Decrypt pasted text chunks -> Image
-3. Decrypt TXT file -> Image
+3. Restore TXT files -> Images (batch)
 0. Exit
 ```
 
----
+### Convert images to TXT
 
-## Usage
-
-### Encrypt an Image
-
-Select:
+Choose **1**. At `Images / directory [all in executable directory]:`, press Enter to select the recognized images beside the executable. You can also enter a file path, a directory path, or multiple paths separated by `;`. Relative paths are resolved from the **executable's directory**, not necessarily the shell's working directory.
 
 ```text
-1
+Images / directory [all in executable directory]: D:\Pictures\one.png;D:\Pictures\two.jpg
+Password (blank = convert without encryption):
+JPEG Quality [default 50]:       # prompted because two.jpg is JPEG
+PNG Compression:                 # prompted because one.png is PNG
+Encoding [default 2]:            # 1 = Base64; 2 = Base85
+Maximum characters per message [default 500]:
 ```
 
-Example:
+All images in this batch use the same password and relevant settings. A complete chunk, including its `IMGCRYPT|...|` prefix, stays within the chosen character limit (minimum 80). The default is 500. Encoding to Base64 increases binary size by about one third; Base85 is usually shorter but contains more special characters. If a message service changes Base85 characters, use Base64.
 
-```text
-Image path: D:\Images\example.jpg
-Password: myPassword123
+A chunk looks like `IMGCRYPT|B85|263c44efcf9d1cb7|1/88|...`: encoding, message ID, part number, total parts, and payload. Keep all parts for an image together; the message ID helps detect mixed chunks.
 
-Text encoding:
-1. Base64
-2. Base85
+Output is saved **beside the executable**, even when source images are in another directory:
 
-Encoding [default 2]: 2
+| Source | TXT output |
+| --- | --- |
+| `photo.png` | `photo-imgcrypt.txt` |
+| `photo.jpg` with the same stem as an existing TXT | `photo.jpg-imgcrypt.txt` (collision fallback) |
 
-Maximum characters per message [default 500]: 500
+An existing TXT is never overwritten. If both candidate names already exist, that image reports an error and processing continues with the rest. Move or rename an old TXT before converting it again. The TXT contains all chunks for that one image, one per line; it is not one combined TXT for the entire batch.
 
-JPEG Quality [default 50]: 50
-```
+**Password choice:** A nonempty password produces AES-256-GCM encrypted data (v3). A blank password produces an unencrypted conversion (v4). This mode has no default password and provides **no confidentiality**. A message ID helps detect accidental mixing or alteration, but it is not authentication for passwordless TXT files. Send a password through a separate channel when confidentiality matters.
 
----
+### Restore images
 
-### Decrypt Pasted Chunks
+- **Option 2 — pasted text:** paste the chunks for **one image**, then enter an empty line. Encrypted text prompts for its password; passwordless text restores without a password prompt.
+- **Option 3 — TXT files:** press Enter at the TXT path prompt to read all `*-imgcrypt.txt` (and legacy `*.imgcrypt.txt`) files beside the executable. Alternatively enter a TXT file, a directory, or `;`-separated paths. A directory scan is not recursive. Enter one shared password for encrypted files in the batch; leave it blank if the selected files are passwordless. Passwordless files also restore when a password is entered for a mixed batch. Encrypted files fail individually if no password is supplied.
 
-Select:
+For new TXT files, restored images use their **original filename and extension** and are written beside the executable. An existing image is **not overwritten**: move/rename it first, or restore in a separate directory containing the executable. Legacy v1/v2 TXT files use the filename inferred from the TXT name when available, otherwise `decrypted` plus the stored image extension. Wrong passwords, missing chunks, or corrupted encrypted content cause an error.
 
-```text
-2
-```
+### Downloads and execution
 
-Paste all chunks:
+Download the matching executable from [Releases](https://github.com/NeedMoreCrack/img-crypt/releases):
 
-```text
-IMGCRYPT|B85|263c44efcf9d1cb7|1/88|...
-IMGCRYPT|B85|263c44efcf9d1cb7|2/88|...
-IMGCRYPT|B85|263c44efcf9d1cb7|3/88|...
-```
+| Platform | Release asset | Run |
+| --- | --- | --- |
+| Windows x64 | `ImgCrypt-windows-amd64.exe` | `./ImgCrypt-windows-amd64.exe` in PowerShell |
+| macOS Intel | `ImgCrypt-macos-amd64` | `chmod +x ImgCrypt-macos-amd64 && ./ImgCrypt-macos-amd64` |
+| macOS Apple Silicon | `ImgCrypt-macos-arm64` | `chmod +x ImgCrypt-macos-arm64 && ./ImgCrypt-macos-arm64` |
+| Linux x64 | `ImgCrypt-linux-amd64` | `chmod +x ImgCrypt-linux-amd64 && ./ImgCrypt-linux-amd64` |
+| Linux ARM64 | `ImgCrypt-linux-arm64` | `chmod +x ImgCrypt-linux-arm64 && ./ImgCrypt-linux-arm64` |
 
-The chunks do not need to be pasted in order.
+**Android / Termux:** `ImgCrypt-linux-arm64` targets Linux ARM64 and is not guaranteed to execute on Android. Build and test an Android/ARM64 executable separately in Termux or for Android before offering it as a Termux release asset. If you build in Termux, keep the executable and the images/TXT files together for convenient default paths. Running with `go run .` creates a temporary executable; to use the directory default, build a binary and run that binary instead.
 
-ImgCrypt will automatically sort and merge them.
+### Build from source
 
----
-
-### Decrypt From TXT
-
-Select:
-
-```text
-3
-```
-
-Example:
-
-```text
-TXT file path:
-D:\Images\example.jpg.imgcrypt.txt
-```
-
-Enter the correct password and ImgCrypt will restore the image.
-
----
-
-## Downloads
-
-Precompiled binaries are available from GitHub Releases.
-
-Possible release files:
-
-```text
-ImgCrypt-windows-amd64.exe
-ImgCrypt-macos-amd64
-ImgCrypt-macos-arm64
-ImgCrypt-linux-amd64
-ImgCrypt-linux-arm64
-```
-
----
-
-## Windows
-
-```powershell
-.\ImgCrypt-windows-amd64.exe
-```
-
----
-
-## macOS Apple Silicon
-
-For M1 / M2 / M3 / M4 and newer Apple Silicon Macs:
-
-```bash
-chmod +x ImgCrypt-macos-arm64
-./ImgCrypt-macos-arm64
-```
-
----
-
-## macOS Intel
-
-```bash
-chmod +x ImgCrypt-macos-amd64
-./ImgCrypt-macos-amd64
-```
-
----
-
-## Linux
-
-x64:
-
-```bash
-chmod +x ImgCrypt-linux-amd64
-./ImgCrypt-linux-amd64
-```
-
-ARM64:
-
-```bash
-chmod +x ImgCrypt-linux-arm64
-./ImgCrypt-linux-arm64
-```
-
----
-
-## Android / Termux
-
-Most modern Android devices use ARM64.
-
-```bash
-chmod +x ImgCrypt-linux-arm64
-./ImgCrypt-linux-arm64
-```
-
----
-
-## Build From Source
-
-Requirements:
-
-```text
-Go
-```
-
-Clone:
+Go and the dependencies from `go.mod` are required for building. After building, the standalone executable does not require a Go runtime.
 
 ```bash
 git clone git@github.com:NeedMoreCrack/img-crypt.git
 cd img-crypt
+go mod download
+go build -o ImgCrypt .
 ```
 
-Install dependencies:
+Cross-compilation examples from bash/zsh:
 
 ```bash
-go mod tidy
+CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o dist/ImgCrypt-windows-amd64.exe .
+CGO_ENABLED=0 GOOS=darwin  GOARCH=amd64 go build -o dist/ImgCrypt-macos-amd64 .
+CGO_ENABLED=0 GOOS=darwin  GOARCH=arm64 go build -o dist/ImgCrypt-macos-arm64 .
+CGO_ENABLED=0 GOOS=linux   GOARCH=amd64 go build -o dist/ImgCrypt-linux-amd64 .
+CGO_ENABLED=0 GOOS=linux   GOARCH=arm64 go build -o dist/ImgCrypt-linux-arm64 .
 ```
 
-Run:
+Create `dist` before using these examples (`mkdir -p dist`), or use the repository's existing build script. Test each build on its target system before publishing it. On Windows PowerShell, set `$env:GOOS`, `$env:GOARCH`, and `$env:CGO_ENABLED` instead of using bash's `VAR=value command` syntax.
 
-```bash
-go run .
-```
+The repository also includes `build.ps1` and `build.sh`. Compiled `dist/` files are typically ignored by Git and distributed as GitHub Release assets.
+
+### Disclaimer
+
+This project is intended for educational and personal use. Follow the rules of the communication platform you use. Keep an independent copy of important images: the author is not responsible for data loss caused by lost passwords, corrupted data, missing chunks, or incorrect use.
 
 ---
 
-## Build Targets
+## 繁體中文
 
-Windows x64:
+### 主要功能
 
-```powershell
-$env:GOOS="windows"
-$env:GOARCH="amd64"
-$env:CGO_ENABLED="0"
+- 可處理單一圖片、指定多個檔案，或掃描資料夾內的圖片；資料夾掃描不會遞迴讀取子資料夾。
+- 輸入路徑留白時，預設讀取**執行檔所在資料夾**的圖片；每張圖片各輸出一份 TXT，也放在執行檔旁。
+- 同一批圖片共用密碼、JPEG 品質、PNG 壓縮模式、文字編碼方式與每段字數設定。
+- 有輸入密碼才使用 AES-256-GCM 加密；密碼留白只做圖片處理與文字轉換，**不會加密**。
+- 只有選到 JPEG 才詢問 JPEG 品質；只有選到 PNG 才詢問 PNG 壓縮模式。
+- 可貼上單張圖片的文字片段還原，也可批次讀取 TXT 還原。
+- 檢查缺段、重複段、編碼、Message ID；加密檔另外使用 AES-GCM 驗證。
+- 新產生的 TXT 保存原始圖片檔名與副檔名；仍可解讀舊版 ImgCrypt v1/v2 的 TXT。
 
-go build -o ImgCrypt-windows-amd64.exe .
-```
+### 支援圖片格式與壓縮
 
-macOS Apple Silicon:
+| 格式 | 處理方式 |
+| --- | --- |
+| JPG/JPEG | 依指定品質重新編碼，預設 50；屬於有損壓縮。 |
+| PNG | 以無損 PNG 壓縮重新編碼，預設「Best Compression」。 |
+| WebP、APNG | 保留原始位元組；APNG 動畫不重新編碼。 |
+| 其他列出的圖片副檔名 | 保留原始位元組，不轉檔，也不保證能縮小。 |
 
-```bash
-CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 \
-go build -o ImgCrypt-macos-arm64 .
-```
+掃描資料夾時可辨識 GIF、BMP、TIFF、HEIC/HEIF、AVIF、ICO、ICNS、SVG、JFIF、JPE、JXL、JP2、PSD、RAW、DNG、CR2、NEF、ARW、QOI、EXR、TGA、PBM、PGM、PPM，以及 JPG/JPEG、PNG、WebP、APNG。**其他格式只是依副檔名選檔並原樣保存，程式並沒有完整解碼或驗證每種圖片格式。**未列出的副檔名不會被資料夾掃描選入；JPEG、PNG、WebP 則會檢查檔案表頭。
 
-macOS Intel:
+> JPEG 重新編碼會改變內容且可能降低畫質。PNG 重新編碼可維持圖片畫質，但檔案位元組可能不同。Base64／Base85 只是可逆編碼，並不會壓縮圖片。
 
-```bash
-CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 \
-go build -o ImgCrypt-macos-amd64 .
-```
-
-Linux x64:
-
-```bash
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-go build -o ImgCrypt-linux-amd64 .
-```
-
-Linux ARM64:
-
-```bash
-CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
-go build -o ImgCrypt-linux-arm64 .
-```
-
----
-
-## Security Notes
-
-- Use a strong password
-- Do not send the password together with the encrypted chunks
-- Prefer sending the password through a separate communication channel
-- Keep all chunks intact
-- Do not manually modify encrypted chunk content
-- Lost passwords cannot be recovered by ImgCrypt
-
----
-
-## Important Notes
-
-JPEG recompression is lossy.
+### 操作選單
 
 ```text
-Original JPEG
-↓
-JPEG Quality 50
-↓
-Compressed JPEG
-```
-
-AES encryption is reversible, but JPEG compression is not.
-
-Therefore:
-
-```text
-Decrypt(Encrypt(Compressed JPG))
-=
-Compressed JPG
-```
-
-but not necessarily:
-
-```text
-Compressed JPG
-=
-Original JPG
-```
-
-byte-for-byte.
-
----
-
-# 繁體中文
-
-## 專案介紹
-
-ImgCrypt 是一款使用 Go 開發的輕量級跨平台 CLI 工具。
-
-主要功能包含：
-
-- 圖片壓縮
-- AES-256-GCM 加密
-- 將加密後的二進位資料轉成 Base64 或 Base85 文字
-- 自動將長字串切割成多段
-- 接收端自動排序、合併與還原
-- 支援從 TXT 檔案直接讀取並解密
-
-主要用途是：
-
-> 當環境無法直接傳送圖片或檔案，只允許傳送純文字時，可以將圖片轉換成加密文字後進行傳輸。
-
----
-
-## 功能
-
-- 跨平台 CLI
-- 編譯後不需要安裝 Go Runtime
-- 支援 Windows
-- 支援 macOS Intel
-- 支援 macOS Apple Silicon
-- 支援 Linux
-- 支援 Android Termux
-- 支援 JPG / JPEG
-- 支援 PNG
-- 支援 WebP
-- JPEG Quality 可調整
-- PNG 壓縮
-- AES-256-GCM 加密
-- 使用 scrypt 將密碼轉換成 AES Key
-- Base64 編碼
-- Base85 編碼
-- 使用者可自行設定每段最大字數
-- 自動切割文字
-- 自動排序與合併 Chunk
-- 偵測缺少 Chunk
-- 偵測重複 Chunk
-- Message ID 驗證
-- 支援從 TXT 解密
-- 自動還原圖片副檔名
-
----
-
-## 工作流程
-
-加密：
-
-```text
-圖片
-  ↓
-圖片壓縮
-  ↓
-AES-256-GCM 加密
-  ↓
-Base64 / Base85 編碼
-  ↓
-文字自動分段
-  ↓
-以純文字方式傳輸
-```
-
-解密：
-
-```text
-文字片段 / TXT
-  ↓
-驗證 Chunk
-  ↓
-自動排序
-  ↓
-合併
-  ↓
-Base64 / Base85 Decode
-  ↓
-AES-256-GCM 解密
-  ↓
-圖片
-```
-
----
-
-## 支援圖片格式
-
-### JPG / JPEG
-
-JPEG 可以重新指定品質進行壓縮。
-
-預設：
-
-```text
-Quality = 50
-```
-
-例如：
-
-```text
-原始 JPG
-958 KB
-
-↓
-
-JPEG Quality 50
-
-↓
-
-壓縮後 JPG
-578 KB
-```
-
-實際壓縮率會依圖片內容不同而有所差異。
-
-> JPEG 屬於有損壓縮。
-> 解密後得到的是「壓縮後的 JPEG」，並不是最初原始 JPEG 的 byte-for-byte 完整還原。
-
----
-
-### PNG
-
-PNG 使用無損壓縮。
-
-支援：
-
-```text
-Default
-Best Speed
-Best Compression
-```
-
-PNG 可以保留畫質，但檔案縮小幅度通常不會像 JPEG 那麼明顯。
-
----
-
-### WebP
-
-支援 WebP。
-
-目前版本會保留既有 WebP 的內容，不會重新用 Quality 進行有損壓縮。
-
-```text
-WebP
-↓
-AES-256-GCM
-↓
-Base64 / Base85
-```
-
----
-
-## 加密方式
-
-ImgCrypt 使用：
-
-```text
-AES-256-GCM
-```
-
-AES-GCM 同時提供：
-
-```text
-資料加密
-+
-完整性驗證
-```
-
-如果：
-
-- 密碼錯誤
-- 加密資料被修改
-- 資料損壞
-
-解密會失敗。
-
----
-
-## 密碼轉換
-
-ImgCrypt 不會直接把使用者輸入的密碼當成 AES Key。
-
-而是使用：
-
-```text
-scrypt
-```
-
-流程：
-
-```text
-Password
-+
-Random Salt
-↓
-scrypt
-↓
-256-bit AES Key
-```
-
-每次加密都會產生新的：
-
-```text
-Salt
-Nonce
-```
-
----
-
-## Base64 / Base85
-
-### Base64
-
-優點：
-
-- 相容性高
-- 幾乎所有系統都支援
-- 特殊字元較少
-
-缺點：
-
-- 大約會比原始 binary 增加 33%
-
-例如：
-
-```text
-600 KB
-↓
-Base64
-↓
-約 800 KB 文字
-```
-
----
-
-### Base85
-
-優點：
-
-- 比 Base64 短
-- 適合有字數限制的平台
-
-例如：
-
-```text
-600 KB
-↓
-Base85
-↓
-約 750 KB 文字
-```
-
-如果你的主要需求是減少字數，建議優先使用 Base85。
-
-但 Base85 會包含較多特殊符號。
-
-如果聊天平台會修改特殊符號，建議改用 Base64。
-
----
-
-## 自動分段
-
-許多聊天平台都有單則訊息字數限制。
-
-ImgCrypt 可以讓使用者自行設定：
-
-```text
-Maximum characters per message [default 500]: 500
-```
-
-程式會自行計算：
-
-```text
-Metadata
-+
-Payload
-<=
-使用者指定的最大字數
-```
-
-例如：
-
-```text
-IMGCRYPT|B85|263c44efcf9d1cb7|1/88|......
-IMGCRYPT|B85|263c44efcf9d1cb7|2/88|......
-IMGCRYPT|B85|263c44efcf9d1cb7|3/88|......
-```
-
-每一段包含：
-
-```text
-IMGCRYPT
-編碼方式
-Message ID
-目前段數
-總段數
-Payload
-```
-
----
-
-## Message ID
-
-每份加密資料都會產生 Message ID。
-
-例如：
-
-```text
-263c44efcf9d1cb7
-```
-
-用途是避免不同圖片的 Chunk 被混在一起。
-
-ImgCrypt 會檢查：
-
-- 缺少 Chunk
-- 重複 Chunk
-- 不同 Message ID
-- Chunk 數量異常
-- 編碼方式錯誤
-- 加密資料損壞
-
----
-
-## TXT 解密
-
-加密後的 Chunk 可以存成 TXT。
-
-例如：
-
-```text
-image.jpg.imgcrypt.txt
-```
-
-接收端可以直接：
-
-```text
-TXT
-↓
-讀取每一行
-↓
-驗證
-↓
-排序
-↓
-合併
-↓
-Decode
-↓
-AES 解密
-↓
-圖片
-```
-
-如果圖片被切成數十段甚至數百段，使用 TXT 會比手動貼到 CLI 更方便。
-
----
-
-## 選單
-
-```text
-==============================================
-                  ImgCrypt
- Image Compress + AES + Base64/Base85 Chunks
-==============================================
-
-Please select options:
-
-1. Encrypt image -> Base64/Base85 text chunks
+1. Convert images -> TXT files (optional encryption, batch)
 2. Decrypt pasted text chunks -> Image
-3. Decrypt TXT file -> Image
+3. Restore TXT files -> Images (batch)
 0. Exit
 ```
 
----
+### 圖片轉 TXT
 
-## 使用方式
-
-### 加密圖片
-
-選：
+選 **1**。在 `Images / directory [all in executable directory]:` 直接按 Enter，會選取執行檔旁可辨識的圖片。也可輸入圖片路徑、資料夾路徑，或使用 `;` 分隔多個路徑。**相對路徑以執行檔所在資料夾為基準**，不一定是終端機當下的位置。
 
 ```text
-1
+Images / directory [all in executable directory]: D:\Pictures\one.png;D:\Pictures\two.jpg
+Password (blank = convert without encryption):
+JPEG Quality [default 50]:      # 有選到 two.jpg 才顯示
+PNG Compression:                # 有選到 one.png 才顯示
+Encoding [default 2]:           # 1 = Base64；2 = Base85
+Maximum characters per message [default 500]:
 ```
 
-例如：
+整批圖片使用同一組密碼及相關格式設定。每段文字連同 `IMGCRYPT|...|` 前綴，長度都不超過指定上限；預設 500 字，最小 80 字。Base64 文字通常會比原始二進位資料多約三分之一；Base85 通常較短，但特殊字元較多。若聊天平台會修改 Base85 的特殊字元，可改選 Base64。
 
-```text
-Image path: D:\Images\example.jpg
-Password: myPassword123
+片段格式例如 `IMGCRYPT|B85|263c44efcf9d1cb7|1/88|...`，依序包含編碼、Message ID、目前段數、總段數和資料。請保留同張圖片的所有片段；Message ID 可幫助發現不同圖片的片段被混用。
 
-Text encoding:
-1. Base64
-2. Base85
+**TXT 永遠輸出至執行檔所在資料夾**，即使來源圖片位於其他資料夾：
 
-Encoding [default 2]: 2
+| 來源圖片 | 輸出檔名 |
+| --- | --- |
+| `photo.png` | `photo-imgcrypt.txt` |
+| 同名 TXT 已存在時的 `photo.jpg` | `photo.jpg-imgcrypt.txt`（檔名衝突時備用） |
 
-Maximum characters per message [default 500]: 500
+已存在的 TXT 不會被覆寫。若兩種候選檔名都已存在，該圖片會報錯，程式仍繼續處理其他圖片。再次處理前請先移走或重新命名舊 TXT。**每張圖片各有一份 TXT**，不會把整批圖片合併成同一份 TXT。
 
-JPEG Quality [default 50]: 50
-```
+**密碼留白：** 不使用任何預設密碼，也不進行加密（v4 格式）。任何取得 TXT 的人都能還原內容。Message ID 可幫助發現意外混段或異動，但不是無密碼檔案的安全驗證。**有輸入密碼：** 每張圖片以新的隨機 salt／nonce 搭配 scrypt 與 AES-256-GCM 加密（v3 格式）。需要保密時請使用強密碼，並從其他管道傳送密碼。
 
----
+### 還原圖片
 
-### 貼上 Chunk 解密
+- **選項 2，貼上片段：** 一次貼上**一張圖片**的所有 Chunk，最後輸入空白行。順序可打亂；加密檔會再詢問密碼，無密碼檔可直接還原。
+- **選項 3，讀取 TXT：** TXT 路徑直接按 Enter，會掃描執行檔旁的 `*-imgcrypt.txt`（也讀取舊版 `*.imgcrypt.txt`）。也可以指定 TXT 檔案、資料夾或用 `;` 分隔多個路徑。資料夾不遞迴掃描。加密檔使用整批共用密碼；若只有無密碼 TXT，可以直接在密碼提示按 Enter。混合處理時，即使輸入了密碼，無密碼 TXT 也可以還原；若留白密碼，加密 TXT 會各自報錯。
 
-選：
+新版本 TXT 會還原**原始檔名與副檔名**；還原後的圖片放在執行檔旁。若同名圖片已存在，程式不會覆寫，請先移走或改名，或把執行檔和 TXT 放進沒有同名圖片的資料夾再還原。舊版 v1/v2 TXT 會盡可能由 TXT 檔名推回圖片檔名；無法推得時使用 `decrypted` 加上圖片副檔名。密碼錯誤、缺少片段或加密資料損壞都會報錯。
 
-```text
-2
-```
+### 下載與執行
 
-貼入：
+到 [Releases](https://github.com/NeedMoreCrack/img-crypt/releases) 下載對應平台的執行檔：
 
-```text
-IMGCRYPT|B85|263c44efcf9d1cb7|1/88|...
-IMGCRYPT|B85|263c44efcf9d1cb7|2/88|...
-IMGCRYPT|B85|263c44efcf9d1cb7|3/88|...
-```
+| 平台 | 檔名 | 執行方式 |
+| --- | --- | --- |
+| Windows x64 | `ImgCrypt-windows-amd64.exe` | PowerShell：`./ImgCrypt-windows-amd64.exe` |
+| macOS Intel | `ImgCrypt-macos-amd64` | `chmod +x ImgCrypt-macos-amd64 && ./ImgCrypt-macos-amd64` |
+| macOS Apple Silicon | `ImgCrypt-macos-arm64` | `chmod +x ImgCrypt-macos-arm64 && ./ImgCrypt-macos-arm64` |
+| Linux x64 | `ImgCrypt-linux-amd64` | `chmod +x ImgCrypt-linux-amd64 && ./ImgCrypt-linux-amd64` |
+| Linux ARM64 | `ImgCrypt-linux-arm64` | `chmod +x ImgCrypt-linux-arm64 && ./ImgCrypt-linux-arm64` |
 
-Chunk 不需要按照順序。
+**Android／Termux：** `ImgCrypt-linux-arm64` 是 Linux ARM64 的執行檔，不能保證直接在 Android 執行。若要提供 Termux 版本，請在 Termux 或針對 Android/ARM64 另外編譯並在手機上測試，再作為獨立的 Release 附件。將執行檔、圖片及 TXT 放在同一資料夾，使用預設路徑會比較方便。`go run .` 會產生暫存執行檔，因此要使用「執行檔旁」作為預設路徑時，請先編譯再執行。
 
-ImgCrypt 會自動排序。
+### 從原始碼編譯
 
-全部貼完後輸入空白行即可。
-
----
-
-### 從 TXT 解密
-
-選：
-
-```text
-3
-```
-
-例如：
-
-```text
-TXT file path:
-D:\Images\example.jpg.imgcrypt.txt
-```
-
-輸入正確密碼後即可還原圖片。
-
----
-
-## 下載
-
-可以從 GitHub Releases 下載已經編譯好的版本。
-
-例如：
-
-```text
-ImgCrypt-windows-amd64.exe
-ImgCrypt-macos-amd64
-ImgCrypt-macos-arm64
-ImgCrypt-linux-amd64
-ImgCrypt-linux-arm64
-```
-
----
-
-## Windows
-
-```powershell
-.\ImgCrypt-windows-amd64.exe
-```
-
----
-
-## macOS Apple Silicon
-
-適用：
-
-```text
-M1
-M2
-M3
-M4
-...
-```
-
-執行：
-
-```bash
-chmod +x ImgCrypt-macos-arm64
-./ImgCrypt-macos-arm64
-```
-
----
-
-## macOS Intel
-
-```bash
-chmod +x ImgCrypt-macos-amd64
-./ImgCrypt-macos-amd64
-```
-
----
-
-## Linux
-
-x64：
-
-```bash
-chmod +x ImgCrypt-linux-amd64
-./ImgCrypt-linux-amd64
-```
-
-ARM64：
-
-```bash
-chmod +x ImgCrypt-linux-arm64
-./ImgCrypt-linux-arm64
-```
-
----
-
-## Android / Termux
-
-目前多數 Android 手機為 ARM64。
-
-可以使用：
-
-```bash
-chmod +x ImgCrypt-linux-arm64
-./ImgCrypt-linux-arm64
-```
-
----
-
-## 從原始碼執行
-
-需要：
-
-```text
-Go
-```
-
-Clone：
+編譯時需要 Go 及 `go.mod` 列出的相依套件；編譯完成後的執行檔不需要另裝 Go Runtime。
 
 ```bash
 git clone git@github.com:NeedMoreCrack/img-crypt.git
 cd img-crypt
+go mod download
+go build -o ImgCrypt .
 ```
 
-下載 dependency：
+以下是 bash／zsh 跨平台編譯範例：
 
 ```bash
-go mod tidy
+CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o dist/ImgCrypt-windows-amd64.exe .
+CGO_ENABLED=0 GOOS=darwin  GOARCH=amd64 go build -o dist/ImgCrypt-macos-amd64 .
+CGO_ENABLED=0 GOOS=darwin  GOARCH=arm64 go build -o dist/ImgCrypt-macos-arm64 .
+CGO_ENABLED=0 GOOS=linux   GOARCH=amd64 go build -o dist/ImgCrypt-linux-amd64 .
+CGO_ENABLED=0 GOOS=linux   GOARCH=arm64 go build -o dist/ImgCrypt-linux-arm64 .
 ```
 
-執行：
+先執行 `mkdir -p dist`，或使用專案既有的編譯腳本。發布前請在目標平台測試產出的執行檔。若使用 Windows PowerShell，環境變數應設定為 `$env:GOOS`、`$env:GOARCH`、`$env:CGO_ENABLED`；以上 `VAR=value command` 是 bash／zsh 寫法。
 
-```bash
-go run .
-```
+專案也包含 `build.ps1` 和 `build.sh`。編譯後的 `dist/` 通常加入 `.gitignore`，透過 GitHub Release 附件提供下載。
 
----
+### 安全與相容性
 
-## 編譯
+- 不要把密碼和加密 TXT 放在同一個傳輸管道；密碼遺失後無法由程式恢復。
+- TXT 必須保留所有 Chunk；單一 TXT 對應一張圖片。傳送圖片前請確認聊天平台允許此用途。
+- 新產生的加密檔為 v3，無密碼轉換檔為 v4；舊版 v1/v2 仍支援讀取。對於加密檔，錯誤密碼或內容遭修改時 AES-GCM 會拒絕還原。
+- `dist/` 一般加入 `.gitignore`；發佈時可將編譯檔上傳到 GitHub Releases。
 
-Windows x64：
+### 免責聲明
 
-```powershell
-$env:GOOS="windows"
-$env:GOARCH="amd64"
-$env:CGO_ENABLED="0"
-
-go build -o ImgCrypt-windows-amd64.exe .
-```
-
-macOS Apple Silicon：
-
-```bash
-CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 \
-go build -o ImgCrypt-macos-arm64 .
-```
-
-macOS Intel：
-
-```bash
-CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 \
-go build -o ImgCrypt-macos-amd64 .
-```
-
-Linux x64：
-
-```bash
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-go build -o ImgCrypt-linux-amd64 .
-```
-
-Linux ARM64：
-
-```bash
-CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
-go build -o ImgCrypt-linux-arm64 .
-```
-
----
-
-## 安全注意事項
-
-建議：
-
-- 使用強密碼
-- 不要把密碼和加密資料放在同一則訊息
-- 密碼最好透過不同管道傳送
-- 不要修改 Chunk 內容
-- 確保所有 Chunk 都有完整收到
-- 密碼遺失後無法由 ImgCrypt 還原
-
----
-
-## JPEG 注意事項
-
-JPEG 屬於有損壓縮。
-
-```text
-原始 JPEG
-↓
-Quality 50
-↓
-壓縮 JPEG
-```
-
-AES 加密本身可以完整還原。
-
-但是 JPEG 有損壓縮無法還原被捨棄的圖片資訊。
-
-因此：
-
-```text
-Decrypt(Encrypt(Compressed JPG))
-=
-Compressed JPG
-```
-
-但：
-
-```text
-Compressed JPG
-!=
-Original JPG
-```
-
-不一定 byte-for-byte 相同。
-
----
-
-## 專案結構
-
-```text
-img-crypt/
-├── .gitignore
-├── README.md
-├── build.ps1
-├── build.sh
-├── go.mod
-├── go.sum
-├── main.go
-└── dist/
-```
-
-其中：
-
-```text
-dist/
-```
-
-通常會加入 `.gitignore`，避免編譯產物直接 commit 進 Git。
-
----
-
-## Disclaimer / 免責聲明
-
-This project is intended for educational and personal use.
-
-Please follow the rules and terms of the communication platform you use.
-
-The author is not responsible for data loss caused by lost passwords, corrupted data, missing chunks, or improper usage.
-
-本專案主要用途為學習與個人使用。
-
-請遵守所使用平台的規範與服務條款。
-
-若因密碼遺失、資料損壞、Chunk 缺失或操作錯誤造成資料無法還原，作者不負相關責任。
-
----
+本專案主要供學習與個人使用，請遵守使用的平台規範。重要圖片請另存備份；若因密碼遺失、資料損壞、Chunk 缺失或操作不當而無法還原，作者不負相關責任。
 
 ## License
 
-MIT License
+MIT License.
