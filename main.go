@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/ascii85"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -17,6 +18,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -28,6 +30,8 @@ const (
 	magicHeader = "IMGCRYPT"
 	versionV1   = byte(1)
 	versionV2   = byte(2)
+	versionV3   = byte(3)
+	versionV4   = byte(4) // Text conversion only; no encryption.
 
 	defaultJPEGQuality     = 50
 	defaultMaxMessageChars = 500
@@ -39,18 +43,20 @@ const (
 	scryptR = 8
 	scryptP = 1
 
-	formatJPEG = byte(1)
-	formatPNG  = byte(2)
-	formatWebP = byte(3)
+	formatJPEG  = byte(1)
+	formatPNG   = byte(2)
+	formatWebP  = byte(3)
+	formatOther = byte(4)
 )
 
 var reader = bufio.NewReader(os.Stdin)
 
 type ImageInfo struct {
-	FormatCode byte
-	FormatName string
-	Extension  string
-	Setting    byte
+	FormatCode   byte
+	FormatName   string
+	Extension    string
+	Setting      byte
+	OriginalName string
 }
 
 type Chunk struct {
@@ -102,9 +108,9 @@ func main() {
 
 func showMenu() {
 	fmt.Println("Please select options:")
-	fmt.Println("1. Encrypt image -> Base64/Base85 text chunks")
+	fmt.Println("1. Convert images -> TXT files (optional encryption, batch)")
 	fmt.Println("2. Decrypt pasted text chunks -> Image")
-	fmt.Println("3. Decrypt TXT file -> Image")
+	fmt.Println("3. Restore TXT files -> Images (batch)")
 	fmt.Println("0. Exit")
 	fmt.Println()
 }
@@ -114,89 +120,116 @@ func showMenu() {
 // =========================================================
 
 func encryptImageToChunks() error {
-	fmt.Println("=== Encrypt Image To Text Chunks ===")
-	fmt.Println()
-
-	inputPath := cleanPath(readLine("Image path: "))
-	if inputPath == "" {
-		return errors.New("image path cannot be empty")
-	}
-
-	imageInfo, err := detectImageFormat(inputPath)
+	fmt.Println("=== Encrypt Images ===")
+	baseDir, err := executableDir()
 	if err != nil {
 		return err
 	}
-
-	password := readLine("Password: ")
-	if password == "" {
-		return errors.New("password cannot be empty")
-	}
-
-	encodingType := readEncodingType()
-	maxMessageChars := readMaxMessageChars()
-
-	fmt.Println()
-	fmt.Printf("[INFO] Input format: %s\n", imageInfo.FormatName)
-
-	processedData, originalSize, processedInfo, err := processImageForEncryption(inputPath, imageInfo)
+	fmt.Println("Executable directory:", baseDir)
+	fmt.Println("Enter a file or directory path (multiple paths: separate with ;).")
+	fmt.Println("Leave blank to process all image files in the executable directory.")
+	paths, err := collectInputs(cleanPath(readLine("Images / directory [all in executable directory]: ")), baseDir, false)
 	if err != nil {
 		return err
 	}
-
-	fmt.Printf("[OK] Image processed: %s -> %s\n", formatBytes(originalSize), formatBytes(int64(len(processedData))))
-	if originalSize > 0 {
-		ratio := 100 - (float64(len(processedData))/float64(originalSize))*100
-		fmt.Printf("[INFO] Size changed: %.2f%%\n", ratio)
+	if len(paths) == 0 {
+		return errors.New("no image files found")
 	}
-
-	fmt.Println("[INFO] Encrypting with AES-256-GCM...")
-	encryptedData, err := encryptDataV2(processedData, password, processedInfo)
-	if err != nil {
-		return err
-	}
-	fmt.Printf("[OK] Encrypted size: %s\n", formatBytes(int64(len(encryptedData))))
-
-	encodedData, err := encodeText(encryptedData, encodingType)
-	if err != nil {
-		return err
-	}
-	fmt.Printf("[OK] Encoded length: %d characters\n", len(encodedData))
-
-	messageID := generateMessageID(encryptedData)
-	chunks, err := createChunksWithMaxLength(encodedData, encodingType, messageID, maxMessageChars)
-	if err != nil {
-		return err
-	}
-
-	fmt.Println()
-	fmt.Println("==============================================")
-	fmt.Printf("Format              : %s\n", processedInfo.FormatName)
-	fmt.Printf("Encoding            : %s\n", encodingType)
-	fmt.Printf("Message ID          : %s\n", messageID)
-	fmt.Printf("Total chunks        : %d\n", len(chunks))
-	fmt.Printf("Max chars / message : %d\n", maxMessageChars)
-	fmt.Println("==============================================")
-	fmt.Println()
-
-	for _, chunk := range chunks {
-		fmt.Println(chunk)
-	}
-
-	fmt.Println()
-	save := strings.ToLower(readLine("Save all chunks to TXT file? (Y/n): "))
-	if save == "" || save == "y" || save == "yes" {
-		defaultOutput := inputPath + ".imgcrypt.txt"
-		customOutput := cleanPath(readLine(fmt.Sprintf("Output path [%s]: ", defaultOutput)))
-		outputPath := resolveTextOutputPath(inputPath, customOutput)
-
-		content := strings.Join(chunks, "\n")
-		if err := os.WriteFile(outputPath, []byte(content), 0600); err != nil {
-			return fmt.Errorf("failed to save chunks: %w", err)
+	// Inspect the selected files before asking for format-specific settings.
+	imageInfoByPath := make(map[string]ImageInfo, len(paths))
+	hasJPEG, hasPNG := false, false
+	for _, path := range paths {
+		info, err := detectImageFormat(path)
+		if err != nil {
+			fmt.Printf("[ERROR] %s: %v\n", path, err)
+			continue
 		}
-
-		fmt.Println("[SUCCESS] Chunks saved:", outputPath)
+		imageInfoByPath[path] = info
+		if info.FormatCode == formatJPEG {
+			hasJPEG = true
+		}
+		if info.FormatCode == formatPNG {
+			hasPNG = true
+		}
 	}
+	if len(imageInfoByPath) == 0 {
+		return errors.New("no readable image files found")
+	}
+	fmt.Printf("[INFO] Selected %d images\n", len(imageInfoByPath))
+	password := readLine("Password (blank = convert without encryption): ")
+	if password == "" {
+		fmt.Println("[INFO] No password: TXT content will NOT be encrypted.")
+	}
+	quality := defaultJPEGQuality
+	if hasJPEG {
+		quality = readJPEGQuality()
+	}
+	pngMode := byte(3)
+	if hasPNG {
+		pngMode = readPNGCompressionMode()
+	}
+	encodingType := readEncodingType()
+	maxChars := readMaxMessageChars()
+	fmt.Println("[INFO] Output directory:", baseDir)
+	succeeded := 0
+	for _, inputPath := range paths {
+		info, ok := imageInfoByPath[inputPath]
+		if !ok {
+			continue
+		}
+		if err := encryptOne(inputPath, info, baseDir, password, quality, pngMode, encodingType, maxChars); err != nil {
+			fmt.Printf("[ERROR] %s: %v\n", inputPath, err)
+		} else {
+			succeeded++
+		}
+	}
+	fmt.Printf("[INFO] Processed %d/%d readable images\n", succeeded, len(imageInfoByPath))
+	if succeeded == 0 {
+		return errors.New("no images processed")
+	}
+	return nil
+}
 
+func encryptOne(inputPath string, info ImageInfo, baseDir, password string, quality int, pngMode byte, encodingType string, maxChars int) error {
+	info.OriginalName = filepath.Base(inputPath)
+	data, originalSize, processedInfo, err := processImageForEncryption(inputPath, info, quality, pngMode)
+	if err != nil {
+		return err
+	}
+	var encrypted []byte
+	if password == "" {
+		encrypted, err = convertDataV4(data, processedInfo)
+	} else {
+		encrypted, err = encryptDataV3(data, password, processedInfo)
+	}
+	if err != nil {
+		return err
+	}
+	encoded, err := encodeText(encrypted, encodingType)
+	if err != nil {
+		return err
+	}
+	chunks, err := createChunksWithMaxLength(encoded, encodingType, generateMessageID(encrypted), maxChars)
+	if err != nil {
+		return err
+	}
+	stem := strings.TrimSuffix(info.OriginalName, filepath.Ext(info.OriginalName))
+	outputPath := filepath.Join(baseDir, stem+"-imgcrypt.txt")
+	// Two images with the same stem but different extensions must not overwrite each other.
+	if fileExists(outputPath) {
+		outputPath = filepath.Join(baseDir, info.OriginalName+"-imgcrypt.txt")
+	}
+	if fileExists(outputPath) {
+		return fmt.Errorf("output already exists: %s", outputPath)
+	}
+	if err := writeNewFile(outputPath, []byte(strings.Join(chunks, "\n")+"\n")); err != nil {
+		return err
+	}
+	mode := "encrypted"
+	if password == "" {
+		mode = "converted, not encrypted"
+	}
+	fmt.Printf("[OK] %s (%s -> %s, %s) -> %s (%d chunks, %s)\n", info.OriginalName, formatBytes(originalSize), formatBytes(int64(len(data))), processedInfo.FormatName, outputPath, len(chunks), mode)
 	return nil
 }
 
@@ -220,7 +253,11 @@ func decryptPastedChunksToImage() error {
 		return errors.New("no ImgCrypt chunks provided")
 	}
 
-	return decryptChunkLines(lines)
+	baseDir, err := executableDir()
+	if err != nil {
+		return err
+	}
+	return decryptChunkLines(lines, "", "", baseDir)
 }
 
 // =========================================================
@@ -228,92 +265,106 @@ func decryptPastedChunksToImage() error {
 // =========================================================
 
 func decryptChunksFromTXT() error {
-	fmt.Println("=== Decrypt TXT File ===")
-	fmt.Println()
-
-	inputPath := cleanPath(readLine("TXT file path: "))
-	if inputPath == "" {
-		return errors.New("TXT path cannot be empty")
-	}
-
-	data, err := os.ReadFile(inputPath)
+	baseDir, err := executableDir()
 	if err != nil {
-		return fmt.Errorf("failed to read TXT file: %w", err)
+		return err
 	}
+	fmt.Println("TXT input: file, directory, or paths separated by ; (blank: all *-imgcrypt.txt beside executable)")
+	paths, err := collectInputs(cleanPath(readLine("TXT files [all beside executable]: ")), baseDir, true)
+	if err != nil {
+		return err
+	}
+	if len(paths) == 0 {
+		return errors.New("no ImgCrypt TXT files found")
+	}
+	password := readLine("Password for encrypted files (blank = passwordless files only): ")
+	succeeded := 0
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
+		if err == nil {
+			err = decryptChunkLines(splitLines(string(data)), path, password, baseDir)
+		}
+		if err != nil {
+			fmt.Printf("[ERROR] %s: %v\n", path, err)
+		} else {
+			succeeded++
+		}
+	}
+	fmt.Printf("[INFO] Decrypted %d/%d files\n", succeeded, len(paths))
+	if succeeded == 0 {
+		return errors.New("no files decrypted")
+	}
+	return nil
+}
 
-	content := strings.ReplaceAll(string(data), "\r\n", "\n")
-	rawLines := strings.Split(content, "\n")
-	lines := make([]string, 0, len(rawLines))
-
-	for _, line := range rawLines {
-		line = strings.TrimSpace(line)
-		if line != "" {
+func splitLines(content string) []string {
+	var lines []string
+	for _, line := range strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
 			lines = append(lines, line)
 		}
 	}
-
-	if len(lines) == 0 {
-		return errors.New("TXT file contains no ImgCrypt chunks")
-	}
-
-	fmt.Printf("[INFO] Loaded %d chunk lines from TXT.\n", len(lines))
-	return decryptChunkLines(lines)
+	return lines
 }
 
-func decryptChunkLines(lines []string) error {
+func decryptChunkLines(lines []string, sourcePath, password, baseDir string) error {
 	encodingType, messageID, encodedData, err := parseAndMergeChunks(lines)
 	if err != nil {
 		return err
 	}
-
-	fmt.Println()
-	fmt.Println("[INFO] Encoding:", encodingType)
-	fmt.Println("[INFO] Message ID:", messageID)
-	fmt.Printf("[INFO] Combined encoded length: %d characters\n", len(encodedData))
-
 	encryptedData, err := decodeText(encodedData, encodingType)
 	if err != nil {
 		return err
 	}
-
-	actualID := generateMessageID(encryptedData)
-	if actualID != messageID {
-		return fmt.Errorf("message ID verification failed: expected %s, got %s", messageID, actualID)
+	if generateMessageID(encryptedData) != messageID {
+		return errors.New("message ID verification failed")
 	}
-
-	password := readLine("Password: ")
-	if password == "" {
-		return errors.New("password cannot be empty")
+	if len(encryptedData) <= len(magicHeader) || string(encryptedData[:len(magicHeader)]) != magicHeader {
+		return errors.New("invalid ImgCrypt header")
 	}
-
-	fmt.Println("[INFO] Decrypting AES-256-GCM...")
+	if encryptedData[len(magicHeader)] != versionV4 && password == "" {
+		if sourcePath == "" {
+			password = readLine("Password: ")
+		}
+		if password == "" {
+			return errors.New("this TXT is encrypted; a password is required")
+		}
+	}
 	decryptedData, info, err := decryptData(encryptedData, password)
 	if err != nil {
 		return err
 	}
-
-	defaultOutput := "decrypted" + info.Extension
-	customOutput := cleanPath(readLine(fmt.Sprintf("Output path [%s]: ", defaultOutput)))
-	outputPath := resolveDecryptOutputPath(defaultOutput, customOutput)
-
-	if err := os.WriteFile(outputPath, decryptedData, 0644); err != nil {
+	name := info.OriginalName
+	if name == "" {
+		name = legacyOutputName(sourcePath, info.Extension)
+	}
+	outputPath := filepath.Join(baseDir, name)
+	if fileExists(outputPath) {
+		return fmt.Errorf("output already exists (move or rename it first): %s", outputPath)
+	}
+	if err := writeNewFile(outputPath, decryptedData); err != nil {
 		return fmt.Errorf("failed to write image: %w", err)
 	}
-
-	fmt.Println()
-	fmt.Println("[SUCCESS] Image restored successfully.")
-	fmt.Println("Output:", outputPath)
-	fmt.Println("Format:", info.FormatName)
-	if info.FormatCode == formatJPEG {
-		fmt.Println("JPEG Quality:", info.Setting)
-	} else if info.FormatCode == formatPNG {
-		fmt.Println("PNG Compression Mode:", pngSettingName(info.Setting))
-	} else if info.FormatCode == formatWebP {
-		fmt.Println("WebP Mode: passthrough (original WebP bytes preserved)")
-	}
-	fmt.Println("Image size:", formatBytes(int64(len(decryptedData))))
-
+	fmt.Printf("[OK] Restored %s (%s, %s)\n", outputPath, info.FormatName, formatBytes(int64(len(decryptedData))))
 	return nil
+}
+
+func legacyOutputName(sourcePath, ext string) string {
+	if sourcePath == "" {
+		return "decrypted" + ext
+	}
+	name := filepath.Base(sourcePath)
+	if strings.HasSuffix(strings.ToLower(name), ".imgcrypt.txt") {
+		name = name[:len(name)-len(".imgcrypt.txt")]
+	} else if strings.HasSuffix(strings.ToLower(name), "-imgcrypt.txt") {
+		name = name[:len(name)-len("-imgcrypt.txt")]
+	} else {
+		return "decrypted" + ext
+	}
+	if filepath.Ext(name) == "" {
+		name += ext
+	}
+	return name
 }
 
 // =========================================================
@@ -321,64 +372,76 @@ func decryptChunkLines(lines []string) error {
 // =========================================================
 
 func detectImageFormat(path string) (ImageInfo, error) {
-	data, err := os.ReadFile(path)
+	file, err := os.Open(path)
 	if err != nil {
-		return ImageInfo{}, fmt.Errorf("failed to read image: %w", err)
+		return ImageInfo{}, err
 	}
-
-	if len(data) >= 3 && data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF {
-		return ImageInfo{FormatCode: formatJPEG, FormatName: "JPEG", Extension: ".jpg"}, nil
+	defer file.Close()
+	head := make([]byte, 32)
+	n, err := file.Read(head)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return ImageInfo{}, err
 	}
-
-	pngMagic := []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A}
-	if len(data) >= len(pngMagic) && bytes.Equal(data[:len(pngMagic)], pngMagic) {
+	head = head[:n]
+	if n == 0 {
+		return ImageInfo{}, errors.New("empty image")
+	}
+	ext := strings.ToLower(filepath.Ext(path))
+	if ext == ".apng" {
+		return ImageInfo{FormatCode: formatOther, FormatName: "APNG (original bytes)", Extension: ext}, nil
+	}
+	switch {
+	case len(head) >= 3 && head[0] == 0xff && head[1] == 0xd8 && head[2] == 0xff:
+		if ext != ".jpeg" {
+			ext = ".jpg"
+		}
+		return ImageInfo{FormatCode: formatJPEG, FormatName: "JPEG", Extension: ext}, nil
+	case len(head) >= 8 && bytes.Equal(head[:8], []byte{0x89, 'P', 'N', 'G', 13, 10, 26, 10}):
 		return ImageInfo{FormatCode: formatPNG, FormatName: "PNG", Extension: ".png"}, nil
-	}
-
-	if len(data) >= 12 && string(data[0:4]) == "RIFF" && string(data[8:12]) == "WEBP" {
+	case len(head) >= 12 && string(head[:4]) == "RIFF" && string(head[8:12]) == "WEBP":
 		return ImageInfo{FormatCode: formatWebP, FormatName: "WebP", Extension: ".webp"}, nil
+	default:
+		// Other image formats are preserved byte for byte; no decoder is required.
+		if ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".webp" {
+			return ImageInfo{}, errors.New("image content does not match its extension")
+		}
+		if !isImageExtension(ext) {
+			return ImageInfo{}, fmt.Errorf("unrecognized image extension %q", ext)
+		}
+		return ImageInfo{FormatCode: formatOther, FormatName: strings.ToUpper(strings.TrimPrefix(ext, ".")) + " (original bytes)", Extension: ext}, nil
 	}
-
-	return ImageInfo{}, errors.New("unsupported image format: only JPG/JPEG, PNG, and WebP are supported")
 }
 
-func processImageForEncryption(inputPath string, info ImageInfo) ([]byte, int64, ImageInfo, error) {
+var imageExtensions = map[string]bool{
+	".gif": true, ".bmp": true, ".tif": true, ".tiff": true, ".heic": true, ".heif": true,
+	".avif": true, ".ico": true, ".icns": true, ".svg": true, ".apng": true, ".jfif": true,
+	".jpe": true, ".jxl": true, ".jp2": true, ".psd": true, ".raw": true, ".dng": true,
+	".cr2": true, ".nef": true, ".arw": true, ".qoi": true, ".exr": true, ".tga": true,
+	".pbm": true, ".pgm": true, ".ppm": true, ".webp": true, ".jpg": true, ".jpeg": true, ".png": true,
+}
+
+func isImageExtension(ext string) bool { return imageExtensions[strings.ToLower(ext)] }
+
+func processImageForEncryption(inputPath string, info ImageInfo, quality int, mode byte) ([]byte, int64, ImageInfo, error) {
 	fileInfo, err := os.Stat(inputPath)
 	if err != nil {
-		return nil, 0, ImageInfo{}, fmt.Errorf("failed to read image info: %w", err)
+		return nil, 0, ImageInfo{}, err
 	}
-
+	var data []byte
 	switch info.FormatCode {
 	case formatJPEG:
-		quality := readJPEGQuality()
-		data, err := compressJPEG(inputPath, quality)
-		if err != nil {
-			return nil, 0, ImageInfo{}, err
-		}
+		data, err = compressJPEG(inputPath, quality)
 		info.Setting = byte(quality)
-		return data, fileInfo.Size(), info, nil
-
 	case formatPNG:
-		mode := readPNGCompressionMode()
-		data, err := compressPNG(inputPath, mode)
-		if err != nil {
-			return nil, 0, ImageInfo{}, err
-		}
+		data, err = compressPNG(inputPath, mode)
 		info.Setting = mode
-		return data, fileInfo.Size(), info, nil
-
-	case formatWebP:
-		data, err := os.ReadFile(inputPath)
-		if err != nil {
-			return nil, 0, ImageInfo{}, fmt.Errorf("failed to read WebP: %w", err)
-		}
-		info.Setting = 0
-		fmt.Println("[INFO] WebP is already compressed; pure-Go mode keeps the original WebP bytes unchanged.")
-		return data, fileInfo.Size(), info, nil
-
 	default:
-		return nil, 0, ImageInfo{}, errors.New("unsupported image format")
+		data, err = os.ReadFile(inputPath)
 	}
+	if err != nil {
+		return nil, 0, ImageInfo{}, err
+	}
+	return data, fileInfo.Size(), info, nil
 }
 
 func compressJPEG(inputPath string, quality int) ([]byte, error) {
@@ -437,50 +500,63 @@ func compressPNG(inputPath string, mode byte) ([]byte, error) {
 // AES encryption / decryption
 // =========================================================
 
-func encryptDataV2(data []byte, password string, info ImageInfo) ([]byte, error) {
+func namedPayload(data []byte, name string) ([]byte, error) {
+	if !validImageName(name) || len([]byte(name)) > 65535 {
+		return nil, errors.New("invalid image filename")
+	}
+	nameBytes := []byte(name)
+	result := make([]byte, 2+len(nameBytes)+len(data))
+	binary.BigEndian.PutUint16(result[:2], uint16(len(nameBytes)))
+	copy(result[2:], nameBytes)
+	copy(result[2+len(nameBytes):], data)
+	return result, nil
+}
+
+// V4 contains processed image bytes and the filename as plain data.
+// It must never be mistaken for an encrypted V3 file.
+func convertDataV4(data []byte, info ImageInfo) ([]byte, error) {
+	payload, err := namedPayload(data, info.OriginalName)
+	if err != nil {
+		return nil, err
+	}
+	result := append([]byte(magicHeader), versionV4, info.FormatCode, info.Setting)
+	return append(result, payload...), nil
+}
+
+func encryptDataV3(data []byte, password string, info ImageInfo) ([]byte, error) {
+	plaintext, err := namedPayload(data, info.OriginalName)
+	if err != nil {
+		return nil, err
+	}
 	salt := make([]byte, saltSize)
 	if _, err := io.ReadFull(rand.Reader, salt); err != nil {
-		return nil, fmt.Errorf("failed to generate salt: %w", err)
+		return nil, err
 	}
-
 	key, err := deriveKey(password, salt)
 	if err != nil {
 		return nil, err
 	}
-
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create AES cipher: %w", err)
+		return nil, err
 	}
-
 	gcm, err := cipher.NewGCM(block)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create GCM: %w", err)
+		return nil, err
 	}
-
 	nonce := make([]byte, gcm.NonceSize())
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
-		return nil, fmt.Errorf("failed to generate nonce: %w", err)
+		return nil, err
 	}
-
-	ciphertext := gcm.Seal(nil, nonce, data, nil)
-
-	result := make([]byte, 0, len(magicHeader)+1+1+1+saltSize+1+len(nonce)+len(ciphertext))
-	result = append(result, []byte(magicHeader)...)
-	result = append(result, versionV2)
-	result = append(result, info.FormatCode)
-	result = append(result, info.Setting)
+	result := append([]byte(magicHeader), versionV3, info.FormatCode, info.Setting)
 	result = append(result, salt...)
 	result = append(result, byte(len(nonce)))
 	result = append(result, nonce...)
-	result = append(result, ciphertext...)
-
-	return result, nil
+	return append(result, gcm.Seal(nil, nonce, plaintext, nil)...), nil
 }
 
 func decryptData(data []byte, password string) ([]byte, ImageInfo, error) {
-	minimumV1 := len(magicHeader) + 1 + 1 + saltSize + 1
-	if len(data) < minimumV1 {
+	if len(data) < len(magicHeader)+1 {
 		return nil, ImageInfo{}, errors.New("invalid ImgCrypt data")
 	}
 
@@ -493,6 +569,26 @@ func decryptData(data []byte, password string) ([]byte, ImageInfo, error) {
 
 	fileVersion := data[offset]
 	offset++
+	if fileVersion == versionV4 {
+		if len(data) < offset+2 {
+			return nil, ImageInfo{}, errors.New("invalid passwordless ImgCrypt data")
+		}
+		info, err := imageInfoFromCode(data[offset], data[offset+1])
+		if err != nil {
+			return nil, ImageInfo{}, err
+		}
+		image, name, err := unpackNamedPayload(data[offset+2:])
+		if err != nil {
+			return nil, ImageInfo{}, err
+		}
+		info.OriginalName = name
+		info.Extension = filepath.Ext(name)
+		return image, info, nil
+	}
+	minimumV1 := len(magicHeader) + 1 + 1 + saltSize + 1
+	if len(data) < minimumV1 {
+		return nil, ImageInfo{}, errors.New("invalid ImgCrypt data")
+	}
 
 	var info ImageInfo
 
@@ -505,7 +601,7 @@ func decryptData(data []byte, password string) ([]byte, ImageInfo, error) {
 		info = ImageInfo{FormatCode: formatJPEG, FormatName: "JPEG", Extension: ".jpg", Setting: data[offset]}
 		offset++
 
-	case versionV2:
+	case versionV2, versionV3:
 		if len(data) < offset+2+saltSize+1 {
 			return nil, ImageInfo{}, errors.New("invalid ImgCrypt v2 data")
 		}
@@ -567,7 +663,31 @@ func decryptData(data []byte, password string) ([]byte, ImageInfo, error) {
 		return nil, ImageInfo{}, errors.New("decryption failed: wrong password or corrupted data")
 	}
 
+	if fileVersion == versionV3 {
+		var name string
+		plaintext, name, err = unpackNamedPayload(plaintext)
+		if err != nil {
+			return nil, ImageInfo{}, err
+		}
+		info.OriginalName = name
+		info.Extension = filepath.Ext(name)
+	}
 	return plaintext, info, nil
+}
+
+func unpackNamedPayload(payload []byte) ([]byte, string, error) {
+	if len(payload) < 2 {
+		return nil, "", errors.New("invalid filename metadata")
+	}
+	nameSize := int(binary.BigEndian.Uint16(payload[:2]))
+	if nameSize == 0 || len(payload) < 2+nameSize {
+		return nil, "", errors.New("invalid filename metadata")
+	}
+	name := string(payload[2 : 2+nameSize])
+	if !validImageName(name) {
+		return nil, "", errors.New("unsafe filename in data")
+	}
+	return payload[2+nameSize:], name, nil
 }
 
 func deriveKey(password string, salt []byte) ([]byte, error) {
@@ -586,6 +706,8 @@ func imageInfoFromCode(formatCode byte, setting byte) (ImageInfo, error) {
 		return ImageInfo{FormatCode: formatPNG, FormatName: "PNG", Extension: ".png", Setting: setting}, nil
 	case formatWebP:
 		return ImageInfo{FormatCode: formatWebP, FormatName: "WebP", Extension: ".webp", Setting: setting}, nil
+	case formatOther:
+		return ImageInfo{FormatCode: formatOther, FormatName: "Image (original bytes)", Setting: setting}, nil
 	default:
 		return ImageInfo{}, fmt.Errorf("unsupported stored image format: %d", formatCode)
 	}
@@ -943,35 +1065,94 @@ func cleanPath(path string) string {
 	return path
 }
 
-func resolveTextOutputPath(inputPath string, userOutput string) string {
-	defaultOutput := inputPath + ".imgcrypt.txt"
-	if userOutput == "" {
-		return defaultOutput
-	}
+var safeImageExt = regexp.MustCompile(`^\.[a-zA-Z0-9]{1,12}$`)
 
-	info, err := os.Stat(userOutput)
-	if err == nil && info.IsDir() {
-		return filepath.Join(userOutput, filepath.Base(inputPath)+".imgcrypt.txt")
+func validImageName(name string) bool {
+	if name == "" || name == "." || name == ".." || filepath.Base(name) != name || strings.ContainsAny(name, "/\\:\x00") {
+		return false
 	}
-	if strings.HasSuffix(userOutput, "\\") || strings.HasSuffix(userOutput, "/") {
-		return filepath.Join(userOutput, filepath.Base(inputPath)+".imgcrypt.txt")
+	if !safeImageExt.MatchString(filepath.Ext(name)) {
+		return false
 	}
-	return userOutput
+	return true
 }
 
-func resolveDecryptOutputPath(defaultOutput string, userOutput string) string {
-	if userOutput == "" {
-		return defaultOutput
+func executableDir() (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", err
 	}
+	return filepath.Dir(exe), nil
+}
 
-	info, err := os.Stat(userOutput)
-	if err == nil && info.IsDir() {
-		return filepath.Join(userOutput, filepath.Base(defaultOutput))
+func fileExists(path string) bool { _, err := os.Stat(path); return err == nil }
+
+func writeNewFile(path string, data []byte) error {
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		return err
 	}
-	if strings.HasSuffix(userOutput, "\\") || strings.HasSuffix(userOutput, "/") {
-		return filepath.Join(userOutput, filepath.Base(defaultOutput))
+	defer file.Close()
+	if _, err = file.Write(data); err != nil {
+		os.Remove(path)
+		return err
 	}
-	return userOutput
+	return nil
+}
+
+func collectInputs(input, baseDir string, txt bool) ([]string, error) {
+	parts := strings.Split(input, ";")
+	if input == "" {
+		parts = []string{baseDir}
+	}
+	seen := make(map[string]bool)
+	var paths []string
+	add := func(path string) {
+		if !seen[path] {
+			seen[path] = true
+			paths = append(paths, path)
+		}
+	}
+	for _, part := range parts {
+		part = cleanPath(part)
+		if part == "" {
+			continue
+		}
+		if !filepath.IsAbs(part) {
+			part = filepath.Join(baseDir, part)
+		}
+		info, err := os.Stat(part)
+		if err != nil {
+			return nil, fmt.Errorf("cannot open %s: %w", part, err)
+		}
+		if info.IsDir() {
+			entries, err := os.ReadDir(part)
+			if err != nil {
+				return nil, err
+			}
+			for _, entry := range entries {
+				if entry.IsDir() {
+					continue
+				}
+				name := entry.Name()
+				if txt {
+					lower := strings.ToLower(name)
+					if strings.HasSuffix(lower, "-imgcrypt.txt") || strings.HasSuffix(lower, ".imgcrypt.txt") {
+						add(filepath.Join(part, name))
+					}
+				} else if isImageExtension(filepath.Ext(name)) {
+					add(filepath.Join(part, name))
+				}
+			}
+		} else {
+			if txt && !strings.EqualFold(filepath.Ext(part), ".txt") {
+				return nil, fmt.Errorf("expected TXT file: %s", part)
+			}
+			add(part)
+		}
+	}
+	sort.Strings(paths)
+	return paths, nil
 }
 
 func pngSettingName(setting byte) string {
